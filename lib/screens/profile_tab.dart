@@ -1,11 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:local_auth/local_auth.dart';
-import 'package:package_info_plus/package_info_plus.dart';
-import '../models/user_model.dart';
-import '../services/storage_service.dart';
-import '../utils/password_validator.dart';
-import 'login_screen.dart';
-import 'privacy_policy_screen.dart';
+import 'package:nexpulse/screens/login_screen.dart';
+import 'package:nexpulse/screens/privacy_policy_screen.dart';
+import 'package:nexpulse/utils/theme_controller.dart';
+import 'package:permission_handler/permission_handler.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class ProfileTab extends StatefulWidget {
   const ProfileTab({super.key});
@@ -15,12 +14,22 @@ class ProfileTab extends StatefulWidget {
 }
 
 class _ProfileTabState extends State<ProfileTab> {
-  final StorageService _storage = StorageService();
   final LocalAuthentication _localAuth = LocalAuthentication();
 
-  UserModel? _user;
-  bool _isLoading = true;
-  String _versionInfo = '';
+  String _userName = 'Atleta NexPulse';
+  String _userEmail = 'usuario@nexpulse.app';
+  String _userAge = '20';
+  String _userGender = 'Masculino';
+  String _userWeight = '70';
+  String _userHeight = '170';
+  String _userGoal = 'Bajar de peso';
+  String _createdAt = 'Cuenta activa';
+
+  int _dailyStepsGoal = 8000;
+  int _dailyKcalGoal = 450;
+
+  bool _fingerprintEnabled = false;
+  bool _faceIdEnabled = false;
 
   @override
   void initState() {
@@ -29,29 +38,35 @@ class _ProfileTabState extends State<ProfileTab> {
   }
 
   Future<void> _loadProfile() async {
-    final user = await _storage.getUser();
-    final info = await PackageInfo.fromPlatform();
+    final prefs = await SharedPreferences.getInstance();
     if (!mounted) return;
     setState(() {
-      _user = user;
-      _versionInfo = 'Versión ${info.version} (${info.buildNumber})';
-      _isLoading = false;
+      _userName = prefs.getString('user_name') ??
+          prefs.getString('name') ??
+          'Atleta NexPulse';
+      _userEmail = prefs.getString('user_email') ??
+          prefs.getString('email') ??
+          'usuario@nexpulse.app';
+      _userAge = prefs.getString('user_age') ?? '20';
+      _userGender = prefs.getString('user_gender') ?? 'Masculino';
+      _userWeight = prefs.getString('user_weight') ?? '70';
+      _userHeight = prefs.getString('user_height') ?? '170';
+      _userGoal = prefs.getString('user_goal') ?? 'Bajar de peso';
+      _createdAt = prefs.getString('user_created_at') ?? 'Sesión verificada';
+      _dailyStepsGoal = prefs.getInt('goal_daily_steps') ?? 8000;
+      _dailyKcalGoal = prefs.getInt('goal_daily_kcal') ?? 450;
+      _fingerprintEnabled =
+          prefs.getBool('biometric_fingerprint_enabled') ?? false;
+      _faceIdEnabled = prefs.getBool('biometric_face_enabled') ?? false;
     });
   }
 
-  Future<void> _toggleFingerprint(bool enable) async {
-    if (_user == null) return;
-
-    if (!enable) {
-      final updated = _user!.copyWith(biometricEnabled: false);
-      await _storage.saveUser(updated);
+  Future<void> _toggleFingerprint(bool value) async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!value) {
+      await prefs.setBool('biometric_fingerprint_enabled', false);
       if (!mounted) return;
-      setState(() => _user = updated);
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Acceso con huella dactilar desactivado.'),
-        ),
-      );
+      setState(() => _fingerprintEnabled = false);
       return;
     }
 
@@ -59,70 +74,35 @@ class _ProfileTabState extends State<ProfileTab> {
       final canCheck = await _localAuth.canCheckBiometrics ||
           await _localAuth.isDeviceSupported();
       if (!canCheck) {
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text(
-              'Tu dispositivo no tiene biometría o bloqueo de seguridad configurado.',
-            ),
-            backgroundColor: Colors.orangeAccent,
-          ),
+        _showMessage(
+          'Este dispositivo no tiene sensor biométrico disponible.',
+          isError: true,
         );
         return;
       }
 
-      final verified = await _localAuth.authenticate(
+      final authenticated = await _localAuth.authenticate(
         localizedReason:
-        'Coloca tu huella dactilar para activar el acceso en NexPulse',
-        biometricOnly: false,
+        'Coloca tu huella dactilar para activarla en NexPulse',
       );
 
-      if (!verified) {
+      if (authenticated) {
+        await prefs.setBool('biometric_fingerprint_enabled', true);
         if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('No se verificó la huella. Permanece desactivada.'),
-          ),
-        );
-        return;
+        setState(() => _fingerprintEnabled = true);
+        _showMessage('Huella dactilar activada correctamente.');
       }
-
-      final updated = _user!.copyWith(biometricEnabled: true);
-      await _storage.saveUser(updated);
-      if (!mounted) return;
-      setState(() => _user = updated);
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            'Huella dactilar activada. Ya puedes usarla al iniciar sesión.',
-          ),
-          backgroundColor: Color(0xFF10B981),
-        ),
-      );
     } catch (_) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('No se pudo activar el sensor de huella dactilar.'),
-          backgroundColor: Colors.redAccent,
-        ),
-      );
+      _showMessage('No se pudo verificar la huella dactilar.', isError: true);
     }
   }
 
-  Future<void> _toggleFaceScan(bool enable) async {
-    if (_user == null) return;
-
-    if (!enable) {
-      final updated = _user!.copyWith(faceAuthEnabled: false);
-      await _storage.saveUser(updated);
+  Future<void> _toggleFaceRecognition(bool value) async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!value) {
+      await prefs.setBool('biometric_face_enabled', false);
       if (!mounted) return;
-      setState(() => _user = updated);
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Acceso con escaneo facial desactivado.'),
-        ),
-      );
+      setState(() => _faceIdEnabled = false);
       return;
     }
 
@@ -130,368 +110,814 @@ class _ProfileTabState extends State<ProfileTab> {
       final canCheck = await _localAuth.canCheckBiometrics ||
           await _localAuth.isDeviceSupported();
       if (!canCheck) {
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text(
-              'Tu dispositivo no tiene reconocimiento facial o biometría configurada.',
-            ),
-            backgroundColor: Colors.orangeAccent,
-          ),
+        _showMessage(
+          'Este dispositivo no soporta reconocimiento biométrico.',
+          isError: true,
         );
         return;
       }
 
-      final verified = await _localAuth.authenticate(
+      final authenticated = await _localAuth.authenticate(
         localizedReason:
-        'Mira a la cámara para activar el escaneo facial en NexPulse',
-        biometricOnly: false,
+        'Verifica tu rostro para activar el reconocimiento facial en NexPulse',
       );
 
-      if (!verified) {
+      if (authenticated) {
+        await prefs.setBool('biometric_face_enabled', true);
         if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content:
-            Text('No se completó el escaneo facial. Permanece desactivado.'),
-          ),
-        );
-        return;
+        setState(() => _faceIdEnabled = true);
+        _showMessage('Reconocimiento facial activado correctamente.');
       }
-
-      final updated = _user!.copyWith(faceAuthEnabled: true);
-      await _storage.saveUser(updated);
-      if (!mounted) return;
-      setState(() => _user = updated);
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            'Escaneo facial activado. Ya puedes usarlo al iniciar sesión.',
-          ),
-          backgroundColor: Color(0xFF10B981),
-        ),
-      );
     } catch (_) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('No se pudo activar el escaneo facial.'),
-          backgroundColor: Colors.redAccent,
-        ),
+      _showMessage(
+        'No se pudo verificar el reconocimiento facial.',
+        isError: true,
       );
     }
   }
 
-  Future<void> _openChangePasswordSheet() async {
-    if (_user == null) return;
-    final currentPassCtrl = TextEditingController();
-    final newPassCtrl = TextEditingController();
-    final confirmPassCtrl = TextEditingController();
-    final formKey = GlobalKey<FormState>();
-    bool obscureCurrent = true;
-    bool obscureNew = true;
-    bool obscureConfirm = true;
+  Future<void> _requestSensorsAgain() async {
+    await [
+      Permission.locationWhenInUse,
+      Permission.activityRecognition,
+      Permission.sensors,
+    ].request();
+    _showMessage('Permisos de sensores verificados.');
+  }
 
-    await showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.white,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+  void _showMessage(String text, {bool isError = false}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+        content: Text(text),
+        backgroundColor: isError ? Colors.redAccent : const Color(0xFF2E9E6B),
       ),
-      builder: (ctx) {
-        return StatefulBuilder(
-          builder: (ctx, setModalState) {
-            return Padding(
-              padding: EdgeInsets.fromLTRB(
-                20,
-                16,
-                20,
-                MediaQuery.of(ctx).viewInsets.bottom + 24,
+    );
+  }
+
+  double _calculateBmi() {
+    final w = double.tryParse(_userWeight) ?? 70.0;
+    final hCm = double.tryParse(_userHeight) ?? 170.0;
+    final hM = hCm / 100.0;
+    if (hM <= 0) return 0.0;
+    return w / (hM * hM);
+  }
+
+  String _bmiCategory(double bmi) {
+    if (bmi < 18.5) return 'Bajo peso';
+    if (bmi < 25.0) return 'Saludable';
+    if (bmi < 30.0) return 'Sobrepeso';
+    return 'Obesidad';
+  }
+
+  Future<void> _openEditProfileDialog() async {
+    final nameCtrl = TextEditingController(text: _userName);
+    final ageCtrl = TextEditingController(text: _userAge);
+    final weightCtrl = TextEditingController(text: _userWeight);
+    final heightCtrl = TextEditingController(text: _userHeight);
+    String selectedGoal = _userGoal;
+
+    await showDialog(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(24),
+          ),
+          title: const Text(
+            'Editar Especificaciones',
+            style: TextStyle(fontWeight: FontWeight.w800),
+          ),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: nameCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'Nombre completo',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: ageCtrl,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(
+                    labelText: 'Edad (años)',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: weightCtrl,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(
+                    labelText: 'Peso (kg)',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: heightCtrl,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(
+                    labelText: 'Estatura (cm)',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                DropdownButtonFormField<String>(
+                  initialValue: [
+                    'Bajar de peso',
+                    'Tonificar cuerpo',
+                    'Mejorar resistencia',
+                  ].contains(selectedGoal)
+                      ? selectedGoal
+                      : 'Bajar de peso',
+                  isExpanded: true,
+                  decoration: const InputDecoration(
+                    labelText: 'Objetivo',
+                    border: OutlineInputBorder(),
+                  ),
+                  items: const [
+                    DropdownMenuItem(
+                      value: 'Bajar de peso',
+                      child: Text('Bajar de peso'),
+                    ),
+                    DropdownMenuItem(
+                      value: 'Tonificar cuerpo',
+                      child: Text('Tonificar cuerpo'),
+                    ),
+                    DropdownMenuItem(
+                      value: 'Mejorar resistencia',
+                      child: Text('Mejorar resistencia'),
+                    ),
+                  ],
+                  onChanged: (v) {
+                    if (v != null) selectedGoal = v;
+                  },
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancelar'),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF2E9E6B),
+                foregroundColor: Colors.white,
               ),
-              child: SingleChildScrollView(
-                child: Form(
-                  key: formKey,
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Center(
-                        child: Container(
-                          width: 42,
-                          height: 5,
+              onPressed: () async {
+                final prefs = await SharedPreferences.getInstance();
+                await prefs.setString('user_name', nameCtrl.text.trim());
+                await prefs.setString('user_age', ageCtrl.text.trim());
+                await prefs.setString('user_weight', weightCtrl.text.trim());
+                await prefs.setString('user_height', heightCtrl.text.trim());
+                await prefs.setString('user_goal', selectedGoal);
+                if (!context.mounted) return;
+                Navigator.pop(context);
+                _loadProfile();
+              },
+              child: const Text('Guardar'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<void> _saveGoals() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt('goal_daily_steps', _dailyStepsGoal);
+    await prefs.setInt('goal_daily_kcal', _dailyKcalGoal);
+    _showMessage('Metas diarias actualizadas correctamente.');
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final pageBg = isDark ? const Color(0xFF0B1113) : const Color(0xFFF2F5F8);
+    final cardBg = isDark ? const Color(0xFF151F23) : Colors.white;
+    final borderCol =
+    isDark ? Colors.white10 : Colors.grey.shade200.withValues(alpha: 0.85);
+    final bmi = _calculateBmi();
+
+    return Scaffold(
+      backgroundColor: pageBg,
+      body: Column(
+        children: [
+          // Cabecera Hero con identidad del usuario y resumen biométrico
+          Container(
+            decoration: const BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [
+                  Color(0xFF0D2327),
+                  Color(0xFF153D37),
+                  Color(0xFF21694F),
+                ],
+              ),
+              borderRadius: BorderRadius.vertical(
+                bottom: Radius.circular(30),
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: Color(0x280D2327),
+                  blurRadius: 16,
+                  offset: Offset(0, 6),
+                ),
+              ],
+            ),
+            child: SafeArea(
+              bottom: false,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
+                child: Column(
+                  children: [
+                    Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 5,
+                          ),
                           decoration: BoxDecoration(
-                            color: const Color(0xFFCBD5E1),
+                            color:
+                            const Color(0xFF4CE0A3).withValues(alpha: 0.18),
                             borderRadius: BorderRadius.circular(10),
+                            border: Border.all(
+                              color: const Color(0xFF4CE0A3)
+                                  .withValues(alpha: 0.4),
+                            ),
+                          ),
+                          child: const Text(
+                            'PERFIL DE ATLETA',
+                            style: TextStyle(
+                              color: Color(0xFF4CE0A3),
+                              fontSize: 11,
+                              fontWeight: FontWeight.w800,
+                              letterSpacing: 0.8,
+                            ),
                           ),
                         ),
+                        const Spacer(),
+                        Material(
+                          color: Colors.white.withValues(alpha: 0.12),
+                          borderRadius: BorderRadius.circular(14),
+                          child: InkWell(
+                            borderRadius: BorderRadius.circular(14),
+                            onTap: _openEditProfileDialog,
+                            child: const Padding(
+                              padding: EdgeInsets.symmetric(
+                                horizontal: 12,
+                                vertical: 8,
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(
+                                    Icons.edit_rounded,
+                                    color: Color(0xFF4CE0A3),
+                                    size: 16,
+                                  ),
+                                  SizedBox(width: 6),
+                                  Text(
+                                    'Editar',
+                                    style: TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 14),
+                    Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(3),
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            border: Border.all(
+                              color: const Color(0xFF4CE0A3),
+                              width: 2.2,
+                            ),
+                          ),
+                          child: CircleAvatar(
+                            radius: 28,
+                            backgroundColor: const Color(0xFF2E9E6B),
+                            child: Text(
+                              _userName.isNotEmpty
+                                  ? _userName[0].toUpperCase()
+                                  : 'N',
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 24,
+                                fontWeight: FontWeight.w900,
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 14),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                _userName,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 20,
+                                  fontWeight: FontWeight.w900,
+                                ),
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                _userEmail,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  color: Colors.white.withValues(alpha: 0.78),
+                                  fontSize: 13,
+                                ),
+                              ),
+                              const SizedBox(height: 6),
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 10,
+                                  vertical: 3,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: Colors.white.withValues(alpha: 0.14),
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                                child: Text(
+                                  '● Sesión Activa · $_createdAt',
+                                  style: const TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w700,
+                                    color: Color(0xFF4CE0A3),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+                    // Barra rápida de métricas corporales dentro del Hero
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        vertical: 11,
+                        horizontal: 10,
                       ),
-                      const SizedBox(height: 14),
-                      const Row(
+                      decoration: BoxDecoration(
+                        color: Colors.black.withValues(alpha: 0.22),
+                        borderRadius: BorderRadius.circular(18),
+                        border: Border.all(
+                          color: Colors.white.withValues(alpha: 0.12),
+                        ),
+                      ),
+                      child: Row(
                         children: [
-                          Icon(Icons.lock_reset,
-                              color: Color(0xFF0284C7), size: 24),
-                          SizedBox(width: 8),
-                          Text(
-                            'Cambiar Contraseña',
-                            style: TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.bold,
-                              color: Color(0xFF0F172A),
+                          _HeroMetric(
+                            label: 'Edad',
+                            value: '$_userAge a',
+                          ),
+                          _HeroDivider(),
+                          _HeroMetric(
+                            label: 'Peso',
+                            value: '$_userWeight kg',
+                          ),
+                          _HeroDivider(),
+                          _HeroMetric(
+                            label: 'Estatura',
+                            value: '$_userHeight cm',
+                          ),
+                          _HeroDivider(),
+                          _HeroMetric(
+                            label: 'IMC',
+                            value: bmi.toStringAsFixed(1),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+
+          // Contenido scrollable
+          Expanded(
+            child: ListView(
+              padding: const EdgeInsets.fromLTRB(16, 18, 16, 28),
+              children: [
+                // Tarjeta 1: Ficha Biométrica y Objetivo (sin recortes de texto)
+                _ProfileCard(
+                  icon: Icons.badge_rounded,
+                  title: 'Especificaciones de la Cuenta',
+                  subtitle: 'Datos físicos vinculados a tu perfil',
+                  cardBg: cardBg,
+                  borderCol: borderCol,
+                  isDark: isDark,
+                  child: Column(
+                    children: [
+                      Row(
+                        children: [
+                          Expanded(
+                            child: _SpecTile(
+                              icon: Icons.wc_rounded,
+                              label: 'Género',
+                              value: _userGender,
+                              isDark: isDark,
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: _SpecTile(
+                              icon: Icons.analytics_rounded,
+                              label: 'Estado IMC',
+                              value:
+                              '${bmi.toStringAsFixed(1)} · ${_bmiCategory(bmi)}',
+                              isDark: isDark,
                             ),
                           ),
                         ],
                       ),
-                      const SizedBox(height: 16),
-                      TextFormField(
-                        controller: currentPassCtrl,
-                        obscureText: obscureCurrent,
-                        decoration: InputDecoration(
-                          labelText: 'Contraseña actual',
-                          hintText: 'Ej. Pulse#2026',
-                          prefixIcon: const Icon(Icons.key_outlined),
-                          suffixIcon: IconButton(
-                            icon: Icon(obscureCurrent
-                                ? Icons.visibility_outlined
-                                : Icons.visibility_off_outlined),
-                            onPressed: () => setModalState(
-                                    () => obscureCurrent = !obscureCurrent),
-                          ),
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(14),
-                          ),
-                        ),
-                        validator: (v) {
-                          if (v == null || v.isEmpty) {
-                            return 'Ingresa tu contraseña actual';
-                          }
-                          if (StorageService.hashPassword(v) !=
-                              _user!.passwordHash) {
-                            return 'La contraseña actual no es correcta';
-                          }
-                          return null;
-                        },
+                      const SizedBox(height: 10),
+                      _SpecTile(
+                        icon: Icons.flag_rounded,
+                        label: 'Objetivo Principal',
+                        value: _userGoal,
+                        isDark: isDark,
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 16),
+
+                // Tarjeta 2: Seguridad Biométrica (Huella Dactilar y Reconocimiento Facial)
+                _ProfileCard(
+                  icon: Icons.verified_user_rounded,
+                  title: 'Seguridad Biométrica',
+                  subtitle: 'Activa acceso rápido con los sensores de tu equipo',
+                  cardBg: cardBg,
+                  borderCol: borderCol,
+                  isDark: isDark,
+                  child: Column(
+                    children: [
+                      _BiometricRow(
+                        icon: Icons.fingerprint_rounded,
+                        title: 'Huella Dactilar',
+                        subtitle: _fingerprintEnabled
+                            ? 'Activada para acceso rápido'
+                            : 'Toca para registrar y activar tu huella',
+                        enabled: _fingerprintEnabled,
+                        isDark: isDark,
+                        onChanged: _toggleFingerprint,
+                      ),
+                      const SizedBox(height: 10),
+                      _BiometricRow(
+                        icon: Icons.face_retouching_natural_rounded,
+                        title: 'Reconocimiento Facial',
+                        subtitle: _faceIdEnabled
+                            ? 'Activado para verificación facial'
+                            : 'Toca para activar el desbloqueo facial',
+                        enabled: _faceIdEnabled,
+                        isDark: isDark,
+                        onChanged: _toggleFaceRecognition,
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 16),
+
+                // Tarjeta 3: Metas Diarias Personalizadas
+                _ProfileCard(
+                  icon: Icons.track_changes_rounded,
+                  title: 'Metas Diarias Personalizadas',
+                  subtitle: 'Ajusta tus objetivos de actividad diaria',
+                  cardBg: cardBg,
+                  borderCol: borderCol,
+                  isDark: isDark,
+                  child: Column(
+                    children: [
+                      _GoalStepperTile(
+                        icon: Icons.directions_walk_rounded,
+                        label: 'Meta diaria de pasos',
+                        valueText: '$_dailyStepsGoal pasos',
+                        isDark: isDark,
+                        canDecrease: _dailyStepsGoal > 2000,
+                        onDecrease: () =>
+                            setState(() => _dailyStepsGoal -= 1000),
+                        onIncrease: () =>
+                            setState(() => _dailyStepsGoal += 1000),
+                      ),
+                      const SizedBox(height: 10),
+                      _GoalStepperTile(
+                        icon: Icons.local_fire_department_rounded,
+                        label: 'Meta de quema activa',
+                        valueText: '$_dailyKcalGoal kcal',
+                        isDark: isDark,
+                        canDecrease: _dailyKcalGoal > 150,
+                        onDecrease: () =>
+                            setState(() => _dailyKcalGoal -= 50),
+                        onIncrease: () =>
+                            setState(() => _dailyKcalGoal += 50),
                       ),
                       const SizedBox(height: 14),
-                      TextFormField(
-                        controller: newPassCtrl,
-                        obscureText: obscureNew,
-                        onChanged: (_) => setModalState(() {}),
-                        decoration: InputDecoration(
-                          labelText: 'Nueva contraseña',
-                          hintText: 'Ej. Nueva#2026',
-                          prefixIcon: const Icon(Icons.lock_outline),
-                          suffixIcon: IconButton(
-                            icon: Icon(obscureNew
-                                ? Icons.visibility_outlined
-                                : Icons.visibility_off_outlined),
-                            onPressed: () =>
-                                setModalState(() => obscureNew = !obscureNew),
+                      Container(
+                        width: double.infinity,
+                        height: 48,
+                        decoration: BoxDecoration(
+                          gradient: const LinearGradient(
+                            colors: [Color(0xFF34B37A), Color(0xFF217A53)],
                           ),
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(14),
-                          ),
+                          borderRadius: BorderRadius.circular(15),
                         ),
-                        validator: (v) {
-                          if (v == null || v.isEmpty) {
-                            return 'Ingresa una nueva contraseña';
-                          }
-                          if (!PasswordValidator.evaluate(v).isValid) {
-                            return 'La nueva contraseña no cumple los requisitos';
-                          }
-                          return null;
-                        },
-                      ),
-                      PasswordRequirementsBox(password: newPassCtrl.text),
-                      const SizedBox(height: 14),
-                      TextFormField(
-                        controller: confirmPassCtrl,
-                        obscureText: obscureConfirm,
-                        onChanged: (_) => setModalState(() {}),
-                        decoration: InputDecoration(
-                          labelText: 'Confirmar nueva contraseña',
-                          hintText: 'Ej. Nueva#2026',
-                          prefixIcon: const Icon(Icons.verified_user_outlined),
-                          suffixIcon: IconButton(
-                            icon: Icon(obscureConfirm
-                                ? Icons.visibility_outlined
-                                : Icons.visibility_off_outlined),
-                            onPressed: () => setModalState(
-                                    () => obscureConfirm = !obscureConfirm),
-                          ),
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(14),
-                          ),
-                        ),
-                        validator: (v) {
-                          if (v != newPassCtrl.text) {
-                            return 'Las contraseñas no coinciden';
-                          }
-                          return null;
-                        },
-                      ),
-                      PasswordStrengthIndicator(
-                        password: newPassCtrl.text,
-                        confirmPassword: confirmPassCtrl.text,
-                      ),
-                      const SizedBox(height: 18),
-                      FilledButton.icon(
-                        onPressed: () async {
-                          if (!formKey.currentState!.validate()) return;
-                          await _storage.updatePassword(newPassCtrl.text);
-                          await _loadProfile();
-                          if (!ctx.mounted) return;
-                          Navigator.of(ctx).pop();
-                          if (!mounted) return;
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content:
-                              Text('Contraseña actualizada correctamente.'),
-                              backgroundColor: Color(0xFF10B981),
+                        child: ElevatedButton.icon(
+                          onPressed: _saveGoals,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.transparent,
+                            shadowColor: Colors.transparent,
+                            foregroundColor: Colors.white,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(15),
                             ),
-                          );
-                        },
-                        icon: const Icon(Icons.save_outlined),
-                        label: const Text('Guardar Nueva Contraseña'),
-                        style: FilledButton.styleFrom(
-                          backgroundColor: const Color(0xFF0F172A),
-                          foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(vertical: 14),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(14),
+                          ),
+                          icon: const Icon(Icons.check_circle_outline, size: 19),
+                          label: const Text(
+                            'Guardar Metas Diarias',
+                            style: TextStyle(fontWeight: FontWeight.w800),
                           ),
                         ),
                       ),
                     ],
                   ),
                 ),
-              ),
-            );
-          },
-        );
-      },
-    );
-  }
+                const SizedBox(height: 16),
 
-  Future<void> _editStrideDialog() async {
-    if (_user == null) return;
-    final ctrl = TextEditingController(
-      text: _user!.strideLengthMeters.toStringAsFixed(2),
-    );
-    await showDialog<void>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Calibrar Zancada (metros)'),
-        content: TextField(
-          controller: ctrl,
-          keyboardType: const TextInputType.numberWithOptions(decimal: true),
-          decoration: const InputDecoration(
-            labelText: 'Longitud promedio de paso (m)',
-            hintText: 'Ej. 0.74',
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text('Cancelar'),
-          ),
-          FilledButton(
-            onPressed: () async {
-              final val = double.tryParse(ctrl.text.trim());
-              if (val != null && val >= 0.3 && val <= 1.8) {
-                final updated = _user!.copyWith(strideLengthMeters: val);
-                await _storage.saveUser(updated);
-                await _loadProfile();
-              }
-              if (ctx.mounted) Navigator.of(ctx).pop();
-            },
-            child: const Text('Guardar'),
+                // Tarjeta 4: Apariencia, Permisos y Privacidad
+                _ProfileCard(
+                  icon: Icons.tune_rounded,
+                  title: 'Preferencias y Privacidad',
+                  subtitle: 'Tema visual, sensores y términos legales',
+                  cardBg: cardBg,
+                  borderCol: borderCol,
+                  isDark: isDark,
+                  child: Column(
+                    children: [
+                      ValueListenableBuilder<ThemeMode>(
+                        valueListenable: ThemeController.themeMode,
+                        builder: (context, mode, _) {
+                          final darkEnabled = mode == ThemeMode.dark;
+                          return Container(
+                            decoration: BoxDecoration(
+                              color: isDark
+                                  ? const Color(0xFF0E1518)
+                                  : const Color(0xFFF5F8FA),
+                              borderRadius: BorderRadius.circular(16),
+                            ),
+                            child: SwitchListTile(
+                              secondary: Container(
+                                padding: const EdgeInsets.all(8),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFF2E9E6B)
+                                      .withValues(alpha: 0.15),
+                                  borderRadius: BorderRadius.circular(11),
+                                ),
+                                child: Icon(
+                                  darkEnabled
+                                      ? Icons.dark_mode_rounded
+                                      : Icons.light_mode_rounded,
+                                  color: const Color(0xFF2E9E6B),
+                                  size: 20,
+                                ),
+                              ),
+                              title: const Text(
+                                'Modo Oscuro',
+                                style: TextStyle(
+                                  fontWeight: FontWeight.w800,
+                                  fontSize: 14,
+                                ),
+                              ),
+                              subtitle: Text(
+                                darkEnabled
+                                    ? 'Activado (interfaz oscura)'
+                                    : 'Desactivado (interfaz clara)',
+                                style: const TextStyle(fontSize: 12),
+                              ),
+                              value: darkEnabled,
+                              activeThumbColor: const Color(0xFF2E9E6B),
+                              onChanged: (val) =>
+                                  ThemeController.setDarkMode(val),
+                            ),
+                          );
+                        },
+                      ),
+                      const SizedBox(height: 10),
+                      _ActionTile(
+                        icon: Icons.sensors_rounded,
+                        title: 'Permisos de Sensores y GPS',
+                        subtitle:
+                        'Verificar o activar ubicación, podómetro y movimiento',
+                        isDark: isDark,
+                        onTap: _requestSensorsAgain,
+                      ),
+                      const SizedBox(height: 10),
+                      _ActionTile(
+                        icon: Icons.privacy_tip_rounded,
+                        title: 'Política de Privacidad',
+                        subtitle:
+                        'Consultar términos de uso de sensores y datos biométricos',
+                        isDark: isDark,
+                        onTap: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => const PrivacyPolicyScreen(),
+                            ),
+                          );
+                        },
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 20),
+
+                // Botón Cerrar Sesión
+                SizedBox(
+                  height: 52,
+                  child: OutlinedButton.icon(
+                    onPressed: () {
+                      Navigator.pushAndRemoveUntil(
+                        context,
+                        MaterialPageRoute(builder: (_) => const LoginScreen()),
+                            (route) => false,
+                      );
+                    },
+                    style: OutlinedButton.styleFrom(
+                      backgroundColor: Colors.redAccent.withValues(alpha: 0.08),
+                      foregroundColor: Colors.redAccent,
+                      side: BorderSide(
+                        color: Colors.redAccent.withValues(alpha: 0.45),
+                      ),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(18),
+                      ),
+                    ),
+                    icon: const Icon(Icons.logout_rounded),
+                    label: const Text(
+                      'Cerrar Sesión',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w800,
+                        fontSize: 15,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
           ),
         ],
       ),
     );
   }
+}
 
-  Future<void> _logout() async {
-    await _storage.setLoggedIn(false);
-    if (!mounted) return;
-    Navigator.of(context).pushAndRemoveUntil(
-      MaterialPageRoute(builder: (_) => const LoginScreen()),
-          (route) => false,
-    );
-  }
+class _HeroMetric extends StatelessWidget {
+  final String label;
+  final String value;
+
+  const _HeroMetric({required this.label, required this.value});
 
   @override
   Widget build(BuildContext context) {
-    if (_isLoading) {
-      return const Center(child: CircularProgressIndicator());
-    }
-
-    final user = _user;
-
-    return ListView(
-      padding: const EdgeInsets.all(16),
-      children: [
-        Container(
-          padding: const EdgeInsets.all(20),
-          decoration: BoxDecoration(
-            color: const Color(0xFF0F172A),
-            borderRadius: BorderRadius.circular(22),
+    return Expanded(
+      child: Column(
+        children: [
+          Text(
+            value,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 14.5,
+              fontWeight: FontWeight.w900,
+            ),
           ),
-          child: Row(
+          const SizedBox(height: 2),
+          Text(
+            label,
+            style: TextStyle(
+              color: Colors.white.withValues(alpha: 0.72),
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _HeroDivider extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 1,
+      height: 26,
+      color: Colors.white.withValues(alpha: 0.16),
+    );
+  }
+}
+
+class _ProfileCard extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final Color cardBg;
+  final Color borderCol;
+  final bool isDark;
+  final Widget child;
+
+  const _ProfileCard({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.cardBg,
+    required this.borderCol,
+    required this.isDark,
+    required this.child,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: cardBg,
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: borderCol),
+        boxShadow: isDark
+            ? null
+            : [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.045),
+            blurRadius: 14,
+            offset: const Offset(0, 5),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
             children: [
-              CircleAvatar(
-                radius: 30,
-                backgroundColor: const Color(0xFF38BDF8),
-                child: Text(
-                  (user?.name.isNotEmpty ?? false)
-                      ? user!.name[0].toUpperCase()
-                      : 'N',
-                  style: const TextStyle(
-                    fontSize: 26,
-                    fontWeight: FontWeight.bold,
-                    color: Color(0xFF0F172A),
+              Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  gradient: const LinearGradient(
+                    colors: [Color(0xFF2E9E6B), Color(0xFF1A6B47)],
                   ),
+                  borderRadius: BorderRadius.circular(13),
                 ),
+                child: Icon(icon, color: Colors.white, size: 20),
               ),
-              const SizedBox(width: 14),
+              const SizedBox(width: 12),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      user?.name ?? 'Atleta NexPulse',
-                      overflow: TextOverflow.ellipsis,
+                      title,
                       style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
+                        fontSize: 16,
+                        fontWeight: FontWeight.w800,
                       ),
                     ),
-                    const SizedBox(height: 2),
                     Text(
-                      user?.email ?? 'usuario@nexpulse.com',
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: Color(0xFF94A3B8),
-                        fontSize: 13,
-                      ),
-                    ),
-                    const SizedBox(height: 6),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 10, vertical: 3),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF10B981).withValues(alpha: 0.2),
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      child: Text(
-                        user?.fitnessGoal ?? 'Caminata saludable',
-                        style: const TextStyle(
-                          color: Color(0xFF34D399),
-                          fontSize: 11.5,
-                          fontWeight: FontWeight.bold,
-                        ),
+                      subtitle,
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: isDark ? Colors.white54 : Colors.grey.shade600,
                       ),
                     ),
                   ],
@@ -499,254 +925,313 @@ class _ProfileTabState extends State<ProfileTab> {
               ),
             ],
           ),
-        ),
-        const SizedBox(height: 14),
-
-        if (user != null)
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    'Datos Biométricos y Físicos',
-                    style: TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.bold,
-                      color: Color(0xFF0F172A),
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: _ProfileInfoBadge(
-                          label: 'Edad',
-                          value: '${user.age} años',
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: _ProfileInfoBadge(
-                          label: 'Peso',
-                          value: '${user.weightKg.toStringAsFixed(1)} kg',
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: _ProfileInfoBadge(
-                          label: 'Estatura',
-                          value: '${user.heightCm.toStringAsFixed(0)} cm',
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: _ProfileInfoBadge(
-                          label: 'Género',
-                          value: user.gender,
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: _ProfileInfoBadge(
-                          label: 'Zancada',
-                          value:
-                          '${user.strideLengthMeters.toStringAsFixed(2)} m',
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-          ),
-        const SizedBox(height: 10),
-
-        // Apartado 1: Huella Dactilar
-        Card(
-          child: SwitchListTile(
-            secondary: Icon(
-              Icons.fingerprint,
-              color: (user?.biometricEnabled ?? false)
-                  ? const Color(0xFF0284C7)
-                  : const Color(0xFF64748B),
-              size: 28,
-            ),
-            title: const Text(
-              'Acceso con Huella Dactilar',
-              style: TextStyle(fontWeight: FontWeight.w600),
-            ),
-            subtitle: Text(
-              (user?.biometricEnabled ?? false)
-                  ? 'Activado: puedes iniciar sesión con tu huella'
-                  : 'Desactivado: actívalo aquí para usar tu huella al entrar',
-            ),
-            activeThumbColor: const Color(0xFF0284C7),
-            value: user?.biometricEnabled ?? false,
-            onChanged: _toggleFingerprint,
-          ),
-        ),
-        const SizedBox(height: 8),
-
-        // Apartado 2: Escaneo Facial
-        Card(
-          child: SwitchListTile(
-            secondary: Icon(
-              Icons.face,
-              color: (user?.faceAuthEnabled ?? false)
-                  ? const Color(0xFF10B981)
-                  : const Color(0xFF64748B),
-              size: 28,
-            ),
-            title: const Text(
-              'Acceso con Escaneo Facial',
-              style: TextStyle(fontWeight: FontWeight.w600),
-            ),
-            subtitle: Text(
-              (user?.faceAuthEnabled ?? false)
-                  ? 'Activado: puedes iniciar sesión con reconocimiento facial'
-                  : 'Desactivado: actívalo aquí para usar tu rostro al entrar',
-            ),
-            activeThumbColor: const Color(0xFF10B981),
-            value: user?.faceAuthEnabled ?? false,
-            onChanged: _toggleFaceScan,
-          ),
-        ),
-        const SizedBox(height: 8),
-
-        Card(
-          child: ListTile(
-            leading: const Icon(Icons.straighten, color: Color(0xFF10B981)),
-            title: const Text(
-              'Calibrar Longitud de Zancada',
-              style: TextStyle(fontWeight: FontWeight.w600),
-            ),
-            subtitle: Text(
-              'Actual: ${(user?.strideLengthMeters ?? 0.74).toStringAsFixed(2)} metros por paso',
-            ),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: _editStrideDialog,
-          ),
-        ),
-        const SizedBox(height: 8),
-
-        Card(
-          child: ListTile(
-            leading: const Icon(Icons.lock_reset, color: Color(0xFF0284C7)),
-            title: const Text(
-              'Cambiar Contraseña',
-              style: TextStyle(fontWeight: FontWeight.w600),
-            ),
-            subtitle: const Text(
-              'Actualiza tu clave alfanumérica de seguridad',
-            ),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: _openChangePasswordSheet,
-          ),
-        ),
-        const SizedBox(height: 8),
-
-        Card(
-          child: ListTile(
-            leading:
-            const Icon(Icons.privacy_tip_outlined, color: Color(0xFF6366F1)),
-            title: const Text(
-              'Política de Privacidad y Uso',
-              style: TextStyle(fontWeight: FontWeight.w600),
-            ),
-            subtitle: const Text(
-              'Consulta el uso de GPS, sensores y protección de datos',
-            ),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () {
-              Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (_) => const PrivacyPolicyScreen(),
-                ),
-              );
-            },
-          ),
-        ),
-        const SizedBox(height: 16),
-
-        OutlinedButton.icon(
-          onPressed: _logout,
-          icon: const Icon(Icons.logout, color: Colors.redAccent),
-          label: const Text(
-            'Cerrar Sesión',
-            style: TextStyle(
-              color: Colors.redAccent,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-          style: OutlinedButton.styleFrom(
-            padding: const EdgeInsets.symmetric(vertical: 14),
-            side: const BorderSide(color: Colors.redAccent),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(14),
-            ),
-          ),
-        ),
-        const SizedBox(height: 14),
-
-        Center(
-          child: Text(
-            'NexPulse • $_versionInfo',
-            style: const TextStyle(
-              fontSize: 12,
-              color: Color(0xFF94A3B8),
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-        ),
-      ],
+          const SizedBox(height: 16),
+          child,
+        ],
+      ),
     );
   }
 }
 
-class _ProfileInfoBadge extends StatelessWidget {
+class _SpecTile extends StatelessWidget {
+  final IconData icon;
   final String label;
   final String value;
+  final bool isDark;
 
-  const _ProfileInfoBadge({required this.label, required this.value});
+  const _SpecTile({
+    required this.icon,
+    required this.label,
+    required this.value,
+    required this.isDark,
+  });
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+      padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: const Color(0xFFF1F5F9),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color(0xFFE2E8F0)),
+        color: isDark ? const Color(0xFF0E1518) : const Color(0xFFF5F8FA),
+        borderRadius: BorderRadius.circular(16),
       ),
-      child: Column(
+      child: Row(
         children: [
-          Text(
-            label,
-            style: const TextStyle(
-              fontSize: 11,
-              color: Color(0xFF64748B),
-              fontWeight: FontWeight.w600,
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: const Color(0xFF2E9E6B).withValues(alpha: 0.14),
+              borderRadius: BorderRadius.circular(10),
             ),
+            child: Icon(icon, size: 18, color: const Color(0xFF2E9E6B)),
           ),
-          const SizedBox(height: 3),
-          FittedBox(
-            fit: BoxFit.scaleDown,
-            child: Text(
-              value,
-              style: const TextStyle(
-                fontSize: 13.5,
-                fontWeight: FontWeight.bold,
-                color: Color(0xFF0F172A),
-              ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  label,
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: isDark ? Colors.white54 : Colors.grey.shade600,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  value,
+                  style: const TextStyle(
+                    fontSize: 13.5,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ],
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _BiometricRow extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final bool enabled;
+  final bool isDark;
+  final ValueChanged<bool> onChanged;
+
+  const _BiometricRow({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.enabled,
+    required this.isDark,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: enabled
+            ? const Color(0xFF2E9E6B).withValues(alpha: isDark ? 0.15 : 0.08)
+            : (isDark ? const Color(0xFF0E1518) : const Color(0xFFF5F8FA)),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: enabled
+              ? const Color(0xFF2E9E6B).withValues(alpha: 0.45)
+              : Colors.transparent,
+        ),
+      ),
+      child: SwitchListTile(
+        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+        secondary: Container(
+          padding: const EdgeInsets.all(9),
+          decoration: BoxDecoration(
+            color: enabled
+                ? const Color(0xFF2E9E6B)
+                : const Color(0xFF2E9E6B).withValues(alpha: 0.14),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Icon(
+            icon,
+            color: enabled ? Colors.white : const Color(0xFF2E9E6B),
+            size: 22,
+          ),
+        ),
+        title: Row(
+          children: [
+            Flexible(
+              child: Text(
+                title,
+                style: const TextStyle(
+                  fontWeight: FontWeight.w800,
+                  fontSize: 14,
+                ),
+              ),
+            ),
+            const SizedBox(width: 6),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+              decoration: BoxDecoration(
+                color: enabled
+                    ? const Color(0xFF2E9E6B).withValues(alpha: 0.18)
+                    : Colors.grey.withValues(alpha: 0.16),
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: Text(
+                enabled ? 'Activo' : 'Inactivo',
+                style: TextStyle(
+                  fontSize: 10,
+                  fontWeight: FontWeight.w800,
+                  color: enabled ? const Color(0xFF2E9E6B) : Colors.grey,
+                ),
+              ),
+            ),
+          ],
+        ),
+        subtitle: Text(
+          subtitle,
+          style: const TextStyle(fontSize: 12),
+        ),
+        value: enabled,
+        activeThumbColor: const Color(0xFF2E9E6B),
+        onChanged: onChanged,
+      ),
+    );
+  }
+}
+
+class _GoalStepperTile extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final String valueText;
+  final bool isDark;
+  final bool canDecrease;
+  final VoidCallback onDecrease;
+  final VoidCallback onIncrease;
+
+  const _GoalStepperTile({
+    required this.icon,
+    required this.label,
+    required this.valueText,
+    required this.isDark,
+    required this.canDecrease,
+    required this.onDecrease,
+    required this.onIncrease,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF0E1518) : const Color(0xFFF5F8FA),
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: const Color(0xFF2E9E6B).withValues(alpha: 0.14),
+              borderRadius: BorderRadius.circular(11),
+            ),
+            child: Icon(icon, size: 19, color: const Color(0xFF2E9E6B)),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  label,
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: isDark ? Colors.white60 : Colors.grey.shade600,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  valueText,
+                  style: const TextStyle(
+                    fontSize: 14.5,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          IconButton(
+            onPressed: canDecrease ? onDecrease : null,
+            style: IconButton.styleFrom(
+              backgroundColor: isDark ? Colors.white10 : Colors.white,
+              foregroundColor: const Color(0xFF2E9E6B),
+            ),
+            icon: const Icon(Icons.remove_rounded, size: 18),
+          ),
+          const SizedBox(width: 6),
+          IconButton(
+            onPressed: onIncrease,
+            style: IconButton.styleFrom(
+              backgroundColor: const Color(0xFF2E9E6B),
+              foregroundColor: Colors.white,
+            ),
+            icon: const Icon(Icons.add_rounded, size: 18),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ActionTile extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final bool isDark;
+  final VoidCallback onTap;
+
+  const _ActionTile({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.isDark,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: isDark ? const Color(0xFF0E1518) : const Color(0xFFF5F8FA),
+      borderRadius: BorderRadius.circular(16),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(16),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          child: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF2E9E6B).withValues(alpha: 0.14),
+                  borderRadius: BorderRadius.circular(11),
+                ),
+                child: Icon(icon, color: const Color(0xFF2E9E6B), size: 20),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w800,
+                        fontSize: 13.5,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      subtitle,
+                      style: TextStyle(
+                        fontSize: 11.5,
+                        color: isDark ? Colors.white54 : Colors.grey.shade600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Icon(
+                Icons.arrow_forward_ios_rounded,
+                size: 14,
+                color: isDark ? Colors.white54 : Colors.grey.shade600,
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
